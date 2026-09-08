@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -503,7 +504,7 @@ function StudyScreen({ deckId, newCardAllowance, onClose }: { deckId: number; ne
           <View style={styles.completeActions}>
             <PrimaryButton label="Ajouter de nouvelles cartes" icon="add" onPress={() => setManualOpen(true)} />
             {!reviewed ? <Pressable onPress={restartAllCards} style={styles.resetButton}><Ionicons name="refresh-outline" size={18} color={colors.green} /><Text style={styles.resetButtonText}>Réinitialiser toutes les cartes</Text></Pressable> : null}
-            <Pressable onPress={onClose} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Retour au paquet</Text></Pressable>
+            <Pressable onPress={onClose} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Retour à l’accueil</Text></Pressable>
           </View>
         </View>
         <ManualNewModal
@@ -695,6 +696,22 @@ function AppContent() {
     const timeout = setTimeout(() => void checkForAppUpdate(), 700);
     return () => clearTimeout(timeout);
   }, []);
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (route.name === 'home') return false;
+
+      if (route.name === 'deck' || route.name === 'study') {
+        setRoute({ name: 'home' });
+      } else {
+        setRoute({ name: 'deck', deckId: route.deckId });
+      }
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [route]);
   if (initializationError) return (
     <View style={styles.splash}>
       <View style={styles.logo}><Ionicons name="alert-circle-outline" size={30} color={colors.green} /></View>
@@ -711,7 +728,7 @@ function AppContent() {
       {route.name === 'home' ? <HomeScreen onOpenDeck={(deckId) => setRoute({ name: 'deck', deckId })} onCreate={() => setCreateOpen(true)} /> : null}
       {route.name === 'deck' ? <DeckScreen deckId={route.deckId} onBack={() => setRoute({ name: 'home' })} onStudy={(newCardAllowance) => setRoute({ name: 'study', deckId: route.deckId, newCardAllowance })} onImport={() => setRoute({ name: 'import', deckId: route.deckId })} onSettings={() => setRoute({ name: 'settings', deckId: route.deckId })} /> : null}
       {route.name === 'settings' ? <DeckSettingsScreen deckId={route.deckId} onBack={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
-      {route.name === 'study' ? <StudyScreen deckId={route.deckId} newCardAllowance={route.newCardAllowance} onClose={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
+      {route.name === 'study' ? <StudyScreen deckId={route.deckId} newCardAllowance={route.newCardAllowance} onClose={() => setRoute({ name: 'home' })} /> : null}
       {route.name === 'import' ? <ImportScreen deckId={route.deckId} onBack={() => setRoute({ name: 'deck', deckId: route.deckId })} onDone={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
       <CreateDeckModal visible={createOpen} onClose={() => setCreateOpen(false)} onCreated={(deckId) => { setCreateOpen(false); setRoute({ name: 'deck', deckId }); }} />
     </View>
