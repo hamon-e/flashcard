@@ -35,11 +35,20 @@ export async function prepareImport(uri: string, fileName: string): Promise<Prep
   let bytes: Uint8Array;
   try {
     // The modern File API reads the cached file directly as bytes. This avoids
-    // putting a (potentially large) ZIP through the legacy base64 bridge, which
-    // can fail on iOS even though the file was selected successfully.
+    // putting a (potentially large) ZIP through the legacy base64 bridge.
     bytes = await new File(uri).bytes();
-  } catch {
-    throw new Error('Le fichier sélectionné ne peut pas être lu. Vérifie qu’il est entièrement téléchargé dans Fichiers, puis réessaie.');
+  } catch (fileSystemError) {
+    try {
+      // Expo Go on Android can put DocumentPicker files in its global cache,
+      // outside the experience-scoped paths accepted by expo-file-system.
+      // React Native's URI loader can still read that picker-owned file.
+      const response = await fetch(uri);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      bytes = new Uint8Array(await response.arrayBuffer());
+    } catch (uriError) {
+      console.error('[prepareImport] Unable to read selected file', { uri, fileSystemError, uriError });
+      throw new Error('Le fichier sélectionné ne peut pas être lu. Vérifie qu’il est entièrement téléchargé dans Fichiers, puis réessaie.');
+    }
   }
 
   // Google Drive and some Android file providers expose downloaded ZIP files as
