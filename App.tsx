@@ -429,6 +429,7 @@ function StudyScreen({ deckId, newCardAllowance, onClose }: { deckId: number; ne
   const [reviewed, setReviewed] = useState(0);
   const [manualOpen, setManualOpen] = useState(false);
   const [rating, setRating] = useState(false);
+  const [smallPhoto, setSmallPhoto] = useState(false);
   const reviewTimers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   useEffect(() => () => {
@@ -443,6 +444,19 @@ function StudyScreen({ deckId, newCardAllowance, onClose }: { deckId: number; ne
   }, [deckId, newCardAllowance]);
 
   const current = queue[0];
+  useEffect(() => {
+    setSmallPhoto(false);
+    if (!current?.photo_uri) return;
+
+    let active = true;
+    Image.getSize(current.photo_uri)
+      .then(({ width, height }) => {
+        if (active) setSmallPhoto(width < 800 || height < 1000);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [current?.id, current?.photo_uri]);
+
   useEffect(() => {
     if (current) markCardSeen(current.id).catch(console.error);
   }, [current?.id]);
@@ -527,7 +541,7 @@ function StudyScreen({ deckId, newCardAllowance, onClose }: { deckId: number; ne
       </View>
       <View style={styles.studyProgress}><View style={[styles.studyProgressFill, { width: `${Math.max(8, 100 / Math.max(queue.length, 1))}%` }]} /></View>
       <View style={styles.studyContent}>
-        <View style={styles.flashCard}>
+        <View style={[styles.flashCard, smallPhoto && styles.flashCardSmall]}>
           {current.photo_uri ? <Image source={{ uri: current.photo_uri }} style={styles.flashImage} resizeMode="cover" /> : <View style={styles.flashPlaceholder}><Initials card={current} size={116} /></View>}
           <View style={styles.photoShade} />
           {!revealed ? <View style={styles.questionBadge}><Ionicons name="help" size={20} color={colors.green} /></View> : null}
@@ -861,6 +875,7 @@ const styles = StyleSheet.create({
   studyProgressFill: { height: 4, backgroundColor: colors.green, borderRadius: 2 },
   studyContent: { flex: 1, width: '100%', maxWidth: 620, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 22, paddingBottom: 12 },
   flashCard: { flex: 1, minHeight: 320, maxHeight: 560, backgroundColor: colors.greenSoft, borderRadius: 30, overflow: 'hidden', justifyContent: 'center', alignItems: 'center', ...shadow },
+  flashCardSmall: { flex: 0, width: '85%', height: '78%', alignSelf: 'center' },
   flashImage: { width: '100%', height: '100%' },
   flashPlaceholder: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
   photoShade: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(7,18,11,0.06)' },
