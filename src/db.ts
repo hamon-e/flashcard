@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import { Card, Deck, ImportResult } from './types';
 import { parseImportRows } from './csv';
+import { shuffleCards } from './sessionQueue';
 
 const dbPromise = SQLite.openDatabaseAsync('memento-v1.db');
 
@@ -170,7 +171,7 @@ export async function getSessionCards(deckId: number): Promise<Card[]> {
   );
   const allowance = Math.max(0, deck.daily_new_limit - deck.introduced_today);
   const fresh = await getNewCards(deckId, allowance);
-  return [...due, ...fresh];
+  return shuffleCards([...due, ...fresh]);
 }
 
 export async function getNewCards(deckId: number, limit: number, excludedIds: number[] = []): Promise<Card[]> {
