@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -32,6 +32,7 @@ import {
   initializeDatabase,
   markCardSeen,
   recordReview,
+  resetDeckProgress,
   saveCard,
   updateDailyLimit,
   updateReviewDelays,
@@ -40,12 +41,13 @@ import { colors, radius } from './src/theme';
 import { prepareImport } from './src/importAsset';
 import { checkForAppUpdate } from './src/app-update';
 import { Card, Deck, ImportResult, ReviewDelay, ReviewDelays } from './src/types';
+import { insertLaterInQueue } from './src/sessionQueue';
 
 type Route =
   | { name: 'home' }
   | { name: 'deck'; deckId: number }
   | { name: 'settings'; deckId: number }
-  | { name: 'study'; deckId: number }
+  | { name: 'study'; deckId: number; newCardAllowance: number }
   | { name: 'import'; deckId: number };
 
 const formatDelay = (minutes: number) => {
@@ -167,11 +169,12 @@ function HomeScreen({ onOpenDeck, onCreate }: { onOpenDeck: (id: number) => void
   );
 }
 
-function DeckScreen({ deckId, onBack, onStudy, onImport, onSettings }: { deckId: number; onBack: () => void; onStudy: () => void; onImport: () => void; onSettings: () => void }) {
+function DeckScreen({ deckId, onBack, onStudy, onImport, onSettings }: { deckId: number; onBack: () => void; onStudy: (newCardAllowance: number) => void; onImport: () => void; onSettings: () => void }) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [cards, setCards] = useState<Card[]>([]);
   const [editorCard, setEditorCard] = useState<Card | null | undefined>(undefined);
   const [query, setQuery] = useState('');
+  const [manualNewCards, setManualNewCards] = useState<number | null>(null);
   const load = useCallback(async () => {
     const [nextDeck, nextCards] = await Promise.all([getDeck(deckId), getCards(deckId)]);
     setDeck(nextDeck); setCards(nextCards);
@@ -180,12 +183,18 @@ function DeckScreen({ deckId, onBack, onStudy, onImport, onSettings }: { deckId:
   const visibleCards = useMemo(() => cards.filter((card) => `${card.first_name} ${card.last_name} ${card.context}`.toLowerCase().includes(query.toLowerCase())), [cards, query]);
 
   if (!deck) return <View style={styles.loading}><ActivityIndicator color={colors.green} /></View>;
-  const automaticNew = Math.max(0, Number(deck.daily_new_limit) - Number(deck.introduced_today));
-  const sessionCount = Number(deck.due_count) + Math.min(Number(deck.new_count), automaticNew);
+  const hasIntroducedToday = Number(deck.introduced_today) > 0;
+  const defaultNewCards = hasIntroducedToday ? 0 : Math.max(0, Number(deck.daily_new_limit));
+  const newCardsToAdd = manualNewCards ?? defaultNewCards;
+  const sessionCount = Number(deck.due_count) + Math.min(Number(deck.new_count), newCardsToAdd);
 
   const changeLimit = async (delta: number) => {
-    await updateDailyLimit(deckId, Number(deck.daily_new_limit) + delta);
-    await load();
+    const nextValue = Math.max(0, newCardsToAdd + delta);
+    setManualNewCards(nextValue);
+    if (!hasIntroducedToday) {
+      await updateDailyLimit(deckId, nextValue);
+      setDeck((value) => value ? { ...value, daily_new_limit: nextValue } : value);
+    }
   };
 
   return (
@@ -212,14 +221,14 @@ function DeckScreen({ deckId, onBack, onStudy, onImport, onSettings }: { deckId:
 
         <View style={styles.sessionPanel}>
           <View style={styles.panelTop}>
-            <View><Text style={styles.panelTitle}>Nouvelles cartes / jour</Text><Text style={styles.panelCaption}>{deck.introduced_today} déjà découvertes aujourd’hui</Text></View>
+            <View><Text style={styles.panelTitle}>Nombre de nouvelles cartes à ajouter</Text><Text style={styles.panelCaption}>{deck.introduced_today} déjà découvertes aujourd’hui</Text></View>
             <View style={styles.stepper}>
               <Pressable onPress={() => changeLimit(-1)} style={styles.stepperButton}><Ionicons name="remove" size={18} color={colors.ink} /></Pressable>
-              <Text style={styles.stepperValue}>{deck.daily_new_limit}</Text>
+              <Text style={styles.stepperValue}>{newCardsToAdd}</Text>
               <Pressable onPress={() => changeLimit(1)} style={styles.stepperButton}><Ionicons name="add" size={18} color={colors.ink} /></Pressable>
             </View>
           </View>
-          <PrimaryButton label={sessionCount ? `Commencer · ${sessionCount} carte${sessionCount > 1 ? 's' : ''}` : 'Lancer une session'} icon="play" onPress={onStudy} />
+          <PrimaryButton label={sessionCount ? `Commencer · ${sessionCount} carte${sessionCount > 1 ? 's' : ''}` : 'Lancer une session'} icon="play" onPress={() => onStudy(newCardsToAdd)} />
         </View>
 
         <View style={styles.sectionHeaderCompact}>
@@ -411,7 +420,7 @@ function CardEditor({ visible, deckId, card, onClose, onSaved }: { visible: bool
   );
 }
 
-function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void }) {
+function StudyScreen({ deckId, newCardAllowance, onClose }: { deckId: number; newCardAllowance: number; onClose: () => void }) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [queue, setQueue] = useState<Card[]>([]);
   const [revealed, setRevealed] = useState(false);
@@ -419,12 +428,18 @@ function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void 
   const [reviewed, setReviewed] = useState(0);
   const [manualOpen, setManualOpen] = useState(false);
   const [rating, setRating] = useState(false);
+  const reviewTimers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  useEffect(() => () => {
+    reviewTimers.current.forEach(clearTimeout);
+    reviewTimers.current.clear();
+  }, []);
 
   useEffect(() => {
-    Promise.all([getDeck(deckId), getSessionCards(deckId)]).then(([nextDeck, cards]) => {
+    Promise.all([getDeck(deckId), getSessionCards(deckId, newCardAllowance)]).then(([nextDeck, cards]) => {
       setDeck(nextDeck); setQueue(cards); setLoading(false);
     });
-  }, [deckId]);
+  }, [deckId, newCardAllowance]);
 
   const current = queue[0];
   useEffect(() => {
@@ -436,8 +451,16 @@ function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void 
     await recordReview(current.id, delay);
     setReviewed((value) => value + 1);
     setRevealed(false);
-    if (delay === 0) setQueue((items) => [current, ...items.slice(1)]);
-    else setQueue((items) => items.slice(1));
+    if (delay === 0) {
+      setQueue((items) => insertLaterInQueue(items.slice(1), current));
+    } else {
+      setQueue((items) => items.slice(1));
+      const timer = setTimeout(() => {
+        reviewTimers.current.delete(timer);
+        setQueue((items) => insertLaterInQueue(items, current));
+      }, delay * 60_000);
+      reviewTimers.current.add(timer);
+    }
     setRating(false);
   };
   const addFresh = async (amount: number) => {
@@ -446,6 +469,26 @@ function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void 
     setQueue((items) => items.length ? [items[0], ...fresh, ...items.slice(1)] : fresh);
     setManualOpen(false);
     if (!fresh.length) Alert.alert('Tout est déjà là', 'Il ne reste aucune nouvelle carte dans ce paquet.');
+  };
+  const restartAllCards = () => {
+    Alert.alert(
+      'Réinitialiser le paquet ?',
+      'Toutes les cartes redeviendront nouvelles et leur historique de révision sera effacé.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Réinitialiser',
+          style: 'destructive',
+          onPress: async () => {
+            await resetDeckProgress(deckId);
+            const [nextDeck, cards] = await Promise.all([getDeck(deckId), getSessionCards(deckId)]);
+            setDeck(nextDeck);
+            setQueue(cards);
+            setReviewed(0);
+          },
+        },
+      ],
+    );
   };
 
   if (loading || !deck) return <View style={styles.loading}><ActivityIndicator color={colors.green} /></View>;
@@ -459,6 +502,7 @@ function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void 
           <Text style={styles.completeText}>{reviewed ? `${reviewed} réponse${reviewed > 1 ? 's' : ''} enregistrée${reviewed > 1 ? 's' : ''}.` : 'Aucune carte n’est due pour le moment.'}</Text>
           <View style={styles.completeActions}>
             <PrimaryButton label="Ajouter de nouvelles cartes" icon="add" onPress={() => setManualOpen(true)} />
+            {!reviewed ? <Pressable onPress={restartAllCards} style={styles.resetButton}><Ionicons name="refresh-outline" size={18} color={colors.green} /><Text style={styles.resetButtonText}>Réinitialiser toutes les cartes</Text></Pressable> : null}
             <Pressable onPress={onClose} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Retour au paquet</Text></Pressable>
           </View>
         </View>
@@ -560,13 +604,18 @@ function ImportScreen({ deckId, onBack, onDone }: { deckId: number; onBack: () =
   const [photoUris, setPhotoUris] = useState<Record<string, string>>({});
   const [result, setResult] = useState<ImportResult | null>(null);
   const [working, setWorking] = useState(false);
+  const [readingFile, setReadingFile] = useState(false);
+  const [importError, setImportError] = useState('');
   const chooseFile = async () => {
-    const picked = await DocumentPicker.getDocumentAsync({ type: ['text/csv', 'text/comma-separated-values', 'text/plain', 'application/zip', 'application/x-zip-compressed'], copyToCacheDirectory: true });
+    const picked = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
     if (picked.canceled) return;
+    setReadingFile(true); setImportError(''); setFileName(''); setCsvText(''); setPhotoUris({}); setResult(null);
     try {
       const prepared = await prepareImport(picked.assets[0].uri, picked.assets[0].name);
       setFileName(picked.assets[0].name); setCsvText(prepared.csvText); setPhotoUris(prepared.photoUris); setResult(null);
-    } catch (error) { Alert.alert('Fichier illisible', error instanceof Error ? error.message : 'Impossible de lire ce fichier.'); }
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : 'Impossible de lire ce fichier.');
+    } finally { setReadingFile(false); }
   };
   const runImport = async () => {
     if (!csvText) return;
@@ -582,11 +631,12 @@ function ImportScreen({ deckId, onBack, onDone }: { deckId: number; onBack: () =
           <ScrollView horizontal showsHorizontalScrollIndicator={false}><Text style={styles.codeText}>prenom,nom,photo,contexte,id_externe{`\n`}Alice,Martin,https://…/alice.jpg,Design,alice-01</Text></ScrollView>
           <Text style={styles.formatHint}>Seul le prénom est obligatoire. La photo peut être une URL.</Text>
         </View>
-        <Pressable onPress={chooseFile} style={[styles.dropZone, fileName ? styles.dropZoneReady : null]}>
+        <Pressable disabled={readingFile} onPress={chooseFile} style={[styles.dropZone, fileName ? styles.dropZoneReady : null]}>
           <Ionicons name={fileName ? 'checkmark-circle' : 'cloud-upload-outline'} size={34} color={colors.green} />
-          <Text style={styles.dropTitle}>{fileName || 'Choisir un fichier CSV'}</Text>
+          <Text style={styles.dropTitle}>{readingFile ? 'Lecture du fichier…' : fileName || 'Choisir un fichier CSV'}</Text>
           <Text style={styles.dropText}>{fileName ? `${new Set(Object.values(photoUris)).size} portrait(s) détecté(s)` : 'CSV ou ZIP · virgule ou point-virgule'}</Text>
         </Pressable>
+        {importError ? <View style={styles.importErrorCard}><Ionicons name="alert-circle-outline" size={21} color="#A64D3D" /><Text style={styles.importErrorText}>{importError}</Text></View> : null}
         {result ? (
           <View style={styles.resultCard}>
             <Ionicons name="checkmark-circle" size={28} color={colors.green} />
@@ -594,7 +644,7 @@ function ImportScreen({ deckId, onBack, onDone }: { deckId: number; onBack: () =
           </View>
         ) : null}
         {result?.errors.slice(0, 5).map((error) => <Text key={error} style={styles.errorText}>• {error}</Text>)}
-        <PrimaryButton label={working ? 'Import en cours…' : result ? 'Terminer' : 'Importer les cartes'} icon={result ? 'checkmark' : 'download-outline'} disabled={!csvText || working} onPress={result ? onDone : runImport} />
+        <PrimaryButton label={readingFile ? 'Lecture du fichier…' : working ? 'Import en cours…' : result ? 'Terminer' : 'Importer les cartes'} icon={result ? 'checkmark' : 'download-outline'} disabled={!csvText || working || readingFile} onPress={result ? onDone : runImport} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -639,9 +689,9 @@ function AppContent() {
     <View style={styles.app}>
       <StatusBar style="dark" />
       {route.name === 'home' ? <HomeScreen onOpenDeck={(deckId) => setRoute({ name: 'deck', deckId })} onCreate={() => setCreateOpen(true)} /> : null}
-      {route.name === 'deck' ? <DeckScreen deckId={route.deckId} onBack={() => setRoute({ name: 'home' })} onStudy={() => setRoute({ name: 'study', deckId: route.deckId })} onImport={() => setRoute({ name: 'import', deckId: route.deckId })} onSettings={() => setRoute({ name: 'settings', deckId: route.deckId })} /> : null}
+      {route.name === 'deck' ? <DeckScreen deckId={route.deckId} onBack={() => setRoute({ name: 'home' })} onStudy={(newCardAllowance) => setRoute({ name: 'study', deckId: route.deckId, newCardAllowance })} onImport={() => setRoute({ name: 'import', deckId: route.deckId })} onSettings={() => setRoute({ name: 'settings', deckId: route.deckId })} /> : null}
       {route.name === 'settings' ? <DeckSettingsScreen deckId={route.deckId} onBack={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
-      {route.name === 'study' ? <StudyScreen deckId={route.deckId} onClose={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
+      {route.name === 'study' ? <StudyScreen deckId={route.deckId} newCardAllowance={route.newCardAllowance} onClose={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
       {route.name === 'import' ? <ImportScreen deckId={route.deckId} onBack={() => setRoute({ name: 'deck', deckId: route.deckId })} onDone={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
       <CreateDeckModal visible={createOpen} onClose={() => setCreateOpen(false)} onCreated={(deckId) => { setCreateOpen(false); setRoute({ name: 'deck', deckId }); }} />
     </View>
@@ -795,6 +845,8 @@ const styles = StyleSheet.create({
   completeTitle: { fontSize: 29, fontWeight: '900', color: colors.ink, letterSpacing: -0.8 },
   completeText: { color: colors.muted, fontSize: 14, textAlign: 'center', marginTop: 8 },
   completeActions: { width: '100%', maxWidth: 400, marginTop: 31, gap: 9 },
+  resetButton: { minHeight: 52, borderRadius: 17, borderWidth: 1, borderColor: colors.green, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  resetButtonText: { color: colors.green, fontSize: 15, fontWeight: '800' },
   secondaryButton: { minHeight: 52, justifyContent: 'center', alignItems: 'center' },
   secondaryButtonText: { fontSize: 14, color: colors.green, fontWeight: '800' },
   scrim: { flex: 1, backgroundColor: 'rgba(17,24,19,0.35)', justifyContent: 'flex-end' },
@@ -827,6 +879,8 @@ const styles = StyleSheet.create({
   resultCard: { backgroundColor: colors.greenSoft, borderRadius: 16, padding: 15, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
   resultTitle: { color: colors.ink, fontSize: 14, fontWeight: '800' },
   resultText: { color: colors.muted, fontSize: 11, marginTop: 3 },
+  importErrorCard: { backgroundColor: '#FCEDEA', borderRadius: 16, padding: 14, flexDirection: 'row', gap: 10, alignItems: 'flex-start', marginBottom: 12 },
+  importErrorText: { color: '#8B3E31', fontSize: 12, lineHeight: 18, flex: 1 },
   errorText: { color: '#A64D3D', fontSize: 11, marginBottom: 5 },
   createIcon: { width: 94, height: 94, borderRadius: 30, backgroundColor: colors.greenSoft, alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginVertical: 28 },
 });

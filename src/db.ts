@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import { Card, Deck, ImportResult, ReviewDelays } from './types';
 import { parseImportRows } from './csv';
+import { shuffleCards } from './sessionQueue';
 
 const dbPromise = SQLite.openDatabaseAsync('memento-v1.db');
 
@@ -182,7 +183,7 @@ export async function deleteCard(cardId: number) {
   await db.runAsync('DELETE FROM cards WHERE id = ?', cardId);
 }
 
-export async function getSessionCards(deckId: number): Promise<Card[]> {
+export async function getSessionCards(deckId: number, newCardAllowance?: number): Promise<Card[]> {
   const db = await dbPromise;
   const deck = await getDeck(deckId);
   if (!deck) return [];
@@ -193,9 +194,9 @@ export async function getSessionCards(deckId: number): Promise<Card[]> {
      ORDER BY p.next_due_at ASC`,
     deckId, Date.now(),
   );
-  const allowance = Math.max(0, deck.daily_new_limit - deck.introduced_today);
+  const allowance = newCardAllowance ?? Math.max(0, deck.daily_new_limit - deck.introduced_today);
   const fresh = await getNewCards(deckId, allowance);
-  return [...due, ...fresh];
+  return shuffleCards([...due, ...fresh]);
 }
 
 export async function getNewCards(deckId: number, limit: number, excludedIds: number[] = []): Promise<Card[]> {
@@ -236,6 +237,22 @@ export async function markCardSeen(cardId: number) {
      WHERE card_id = ?`,
     now, now, cardId,
   );
+}
+
+export async function resetDeckProgress(deckId: number) {
+  const db = await dbPromise;
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE progress
+       SET first_seen_at = NULL, next_due_at = NULL
+       WHERE card_id IN (SELECT id FROM cards WHERE deck_id = ?)`,
+      deckId,
+    );
+    await db.runAsync(
+      'DELETE FROM reviews WHERE card_id IN (SELECT id FROM cards WHERE deck_id = ?)',
+      deckId,
+    );
+  });
 }
 
 export async function importCsv(deckId: number, csvText: string, photoUris: Record<string, string> = {}): Promise<ImportResult> {
