@@ -513,13 +513,18 @@ function ImportScreen({ deckId, onBack, onDone }: { deckId: number; onBack: () =
   const [photoUris, setPhotoUris] = useState<Record<string, string>>({});
   const [result, setResult] = useState<ImportResult | null>(null);
   const [working, setWorking] = useState(false);
+  const [readingFile, setReadingFile] = useState(false);
+  const [importError, setImportError] = useState('');
   const chooseFile = async () => {
-    const picked = await DocumentPicker.getDocumentAsync({ type: ['text/csv', 'text/comma-separated-values', 'text/plain', 'application/zip', 'application/x-zip-compressed'], copyToCacheDirectory: true });
+    const picked = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
     if (picked.canceled) return;
+    setReadingFile(true); setImportError(''); setFileName(''); setCsvText(''); setPhotoUris({}); setResult(null);
     try {
       const prepared = await prepareImport(picked.assets[0].uri, picked.assets[0].name);
       setFileName(picked.assets[0].name); setCsvText(prepared.csvText); setPhotoUris(prepared.photoUris); setResult(null);
-    } catch (error) { Alert.alert('Fichier illisible', error instanceof Error ? error.message : 'Impossible de lire ce fichier.'); }
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : 'Impossible de lire ce fichier.');
+    } finally { setReadingFile(false); }
   };
   const runImport = async () => {
     if (!csvText) return;
@@ -535,11 +540,12 @@ function ImportScreen({ deckId, onBack, onDone }: { deckId: number; onBack: () =
           <ScrollView horizontal showsHorizontalScrollIndicator={false}><Text style={styles.codeText}>prenom,nom,photo,contexte,id_externe{`\n`}Alice,Martin,https://…/alice.jpg,Design,alice-01</Text></ScrollView>
           <Text style={styles.formatHint}>Seul le prénom est obligatoire. La photo peut être une URL.</Text>
         </View>
-        <Pressable onPress={chooseFile} style={[styles.dropZone, fileName ? styles.dropZoneReady : null]}>
+        <Pressable disabled={readingFile} onPress={chooseFile} style={[styles.dropZone, fileName ? styles.dropZoneReady : null]}>
           <Ionicons name={fileName ? 'checkmark-circle' : 'cloud-upload-outline'} size={34} color={colors.green} />
-          <Text style={styles.dropTitle}>{fileName || 'Choisir un fichier CSV'}</Text>
+          <Text style={styles.dropTitle}>{readingFile ? 'Lecture du fichier…' : fileName || 'Choisir un fichier CSV'}</Text>
           <Text style={styles.dropText}>{fileName ? `${new Set(Object.values(photoUris)).size} portrait(s) détecté(s)` : 'CSV ou ZIP · virgule ou point-virgule'}</Text>
         </Pressable>
+        {importError ? <View style={styles.importErrorCard}><Ionicons name="alert-circle-outline" size={21} color="#A64D3D" /><Text style={styles.importErrorText}>{importError}</Text></View> : null}
         {result ? (
           <View style={styles.resultCard}>
             <Ionicons name="checkmark-circle" size={28} color={colors.green} />
@@ -547,7 +553,7 @@ function ImportScreen({ deckId, onBack, onDone }: { deckId: number; onBack: () =
           </View>
         ) : null}
         {result?.errors.slice(0, 5).map((error) => <Text key={error} style={styles.errorText}>• {error}</Text>)}
-        <PrimaryButton label={working ? 'Import en cours…' : result ? 'Terminer' : 'Importer les cartes'} icon={result ? 'checkmark' : 'download-outline'} disabled={!csvText || working} onPress={result ? onDone : runImport} />
+        <PrimaryButton label={readingFile ? 'Lecture du fichier…' : working ? 'Import en cours…' : result ? 'Terminer' : 'Importer les cartes'} icon={result ? 'checkmark' : 'download-outline'} disabled={!csvText || working || readingFile} onPress={result ? onDone : runImport} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -765,6 +771,8 @@ const styles = StyleSheet.create({
   resultCard: { backgroundColor: colors.greenSoft, borderRadius: 16, padding: 15, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
   resultTitle: { color: colors.ink, fontSize: 14, fontWeight: '800' },
   resultText: { color: colors.muted, fontSize: 11, marginTop: 3 },
+  importErrorCard: { backgroundColor: '#FCEDEA', borderRadius: 16, padding: 14, flexDirection: 'row', gap: 10, alignItems: 'flex-start', marginBottom: 12 },
+  importErrorText: { color: '#8B3E31', fontSize: 12, lineHeight: 18, flex: 1 },
   errorText: { color: '#A64D3D', fontSize: 11, marginBottom: 5 },
   createIcon: { width: 94, height: 94, borderRadius: 30, backgroundColor: colors.greenSoft, alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginVertical: 28 },
 });
