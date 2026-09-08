@@ -37,6 +37,7 @@ import {
 } from './src/db';
 import { colors, radius } from './src/theme';
 import { prepareImport } from './src/importAsset';
+import { checkForAppUpdate } from './src/app-update';
 import { Card, Deck, ImportResult, ReviewDelay } from './src/types';
 
 type Route =
@@ -536,6 +537,11 @@ function AppContent() {
   const [route, setRoute] = useState<Route>({ name: 'home' });
   const [createOpen, setCreateOpen] = useState(false);
   useEffect(() => { initializeDatabase().then(() => setReady(true)).catch((error) => { console.error(error); Alert.alert('Erreur', 'La base locale n’a pas pu être ouverte.'); }); }, []);
+  useEffect(() => {
+    // Laisse l'écran de lancement disparaître avant d'afficher une éventuelle alerte.
+    const timeout = setTimeout(() => void checkForAppUpdate(), 700);
+    return () => clearTimeout(timeout);
+  }, []);
   if (!ready) return <View style={styles.splash}><View style={styles.logo}><Ionicons name="sparkles" size={30} color={colors.green} /></View><Text style={styles.splashTitle}>Mémento</Text><ActivityIndicator color={colors.green} style={{ marginTop: 24 }} /></View>;
 
   return (
