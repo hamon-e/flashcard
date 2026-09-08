@@ -21,7 +21,7 @@ Scanne ensuite le QR code avec Expo Go, ou appuie sur `i` / `a` pour ouvrir un s
 - mise à jour sans perte de progression grâce à `id_externe` ;
 - données entièrement locales dans `memento-v1.db`.
 
-Un paquet de démonstration est créé au premier lancement. Le fichier [`example.csv`](./example.csv) peut servir à tester l'import.
+L’application démarre sans paquet ni carte. Le fichier [`example.csv`](./example.csv) peut servir à tester l’import.
 
 ## Format CSV
 

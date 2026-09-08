@@ -47,6 +47,10 @@ export async function initializeDatabase() {
       reviewed_at INTEGER NOT NULL,
       delay_minutes INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS app_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS cards_deck_idx ON cards(deck_id);
     CREATE INDEX IF NOT EXISTS progress_due_idx ON progress(next_due_at);
   `);
@@ -65,32 +69,19 @@ export async function initializeDatabase() {
     }
   }
 
-  const row = await db.getFirstAsync<{ count: number }>('SELECT COUNT(*) AS count FROM decks');
-  if ((row?.count ?? 0) === 0) await seedDemo(db);
-}
-
-async function seedDemo(db: SQLite.SQLiteDatabase) {
-  const now = Date.now();
-  const result = await db.runAsync(
-    'INSERT INTO decks (title, description, color, daily_new_limit, created_at) VALUES (?, ?, ?, ?, ?)',
-    'Équipe produit', 'Les visages à retenir cette semaine', '#DDE9DE', 5, now,
+  const demoRemoval = await db.getFirstAsync<{ value: string }>(
+    "SELECT value FROM app_metadata WHERE key = 'demo-cards-removed'",
   );
-  const deckId = result.lastInsertRowId;
-  const people = [
-    ['Inès', 'Martin', 'Design produit', 'https://i.pravatar.cc/900?img=47', 'demo-1'],
-    ['Victor', 'Bernard', 'Développement mobile', 'https://i.pravatar.cc/900?img=12', 'demo-2'],
-    ['Nora', 'Petit', 'Customer success', 'https://i.pravatar.cc/900?img=45', 'demo-3'],
-    ['Samir', 'Roux', 'Data & analytics', 'https://i.pravatar.cc/900?img=11', 'demo-4'],
-    ['Louise', 'Garcia', 'Marketing', 'https://i.pravatar.cc/900?img=32', 'demo-5'],
-    ['Thomas', 'Moreau', 'Finance', 'https://i.pravatar.cc/900?img=14', 'demo-6'],
-  ];
-  for (const [firstName, lastName, context, photo, externalId] of people) {
-    const card = await db.runAsync(
-      `INSERT INTO cards (deck_id, first_name, last_name, context, photo_uri, external_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      deckId, firstName, lastName, context, photo, externalId, now,
+  if (!demoRemoval) {
+    await db.runAsync("DELETE FROM cards WHERE external_id GLOB 'demo-[1-6]'");
+    await db.runAsync(
+      `DELETE FROM decks
+       WHERE title = 'Équipe produit'
+         AND NOT EXISTS (SELECT 1 FROM cards WHERE cards.deck_id = decks.id)`,
     );
-    await db.runAsync('INSERT INTO progress (card_id) VALUES (?)', card.lastInsertRowId);
+    await db.runAsync(
+      "INSERT INTO app_metadata (key, value) VALUES ('demo-cards-removed', '1')",
+    );
   }
 }
 
