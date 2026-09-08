@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -39,6 +39,7 @@ import { colors, radius } from './src/theme';
 import { prepareImport } from './src/importAsset';
 import { checkForAppUpdate } from './src/app-update';
 import { Card, Deck, ImportResult, ReviewDelay } from './src/types';
+import { insertLaterInQueue } from './src/sessionQueue';
 
 type Route =
   | { name: 'home' }
@@ -328,6 +329,12 @@ function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void 
   const [reviewed, setReviewed] = useState(0);
   const [manualOpen, setManualOpen] = useState(false);
   const [rating, setRating] = useState(false);
+  const reviewTimers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  useEffect(() => () => {
+    reviewTimers.current.forEach(clearTimeout);
+    reviewTimers.current.clear();
+  }, []);
 
   useEffect(() => {
     Promise.all([getDeck(deckId), getSessionCards(deckId)]).then(([nextDeck, cards]) => {
@@ -345,8 +352,16 @@ function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void 
     await recordReview(current.id, delay);
     setReviewed((value) => value + 1);
     setRevealed(false);
-    if (delay === 0) setQueue((items) => [current, ...items.slice(1)]);
-    else setQueue((items) => items.slice(1));
+    if (delay === 0) {
+      setQueue((items) => insertLaterInQueue(items.slice(1), current));
+    } else {
+      setQueue((items) => items.slice(1));
+      const timer = setTimeout(() => {
+        reviewTimers.current.delete(timer);
+        setQueue((items) => insertLaterInQueue(items, current));
+      }, delay * 60_000);
+      reviewTimers.current.add(timer);
+    }
     setRating(false);
   };
   const addFresh = async (amount: number) => {
