@@ -45,7 +45,7 @@ import { insertLaterInQueue } from './src/sessionQueue';
 type Route =
   | { name: 'home' }
   | { name: 'deck'; deckId: number }
-  | { name: 'study'; deckId: number }
+  | { name: 'study'; deckId: number; newCardAllowance: number }
   | { name: 'import'; deckId: number };
 
 const delayOptions: Array<{ value: ReviewDelay; title: string; subtitle: string; color: string; icon: keyof typeof Ionicons.glyphMap }> = [
@@ -159,11 +159,12 @@ function HomeScreen({ onOpenDeck, onCreate }: { onOpenDeck: (id: number) => void
   );
 }
 
-function DeckScreen({ deckId, onBack, onStudy, onImport }: { deckId: number; onBack: () => void; onStudy: () => void; onImport: () => void }) {
+function DeckScreen({ deckId, onBack, onStudy, onImport }: { deckId: number; onBack: () => void; onStudy: (newCardAllowance: number) => void; onImport: () => void }) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [cards, setCards] = useState<Card[]>([]);
   const [editorCard, setEditorCard] = useState<Card | null | undefined>(undefined);
   const [query, setQuery] = useState('');
+  const [manualNewCards, setManualNewCards] = useState<number | null>(null);
   const load = useCallback(async () => {
     const [nextDeck, nextCards] = await Promise.all([getDeck(deckId), getCards(deckId)]);
     setDeck(nextDeck); setCards(nextCards);
@@ -172,12 +173,18 @@ function DeckScreen({ deckId, onBack, onStudy, onImport }: { deckId: number; onB
   const visibleCards = useMemo(() => cards.filter((card) => `${card.first_name} ${card.last_name} ${card.context}`.toLowerCase().includes(query.toLowerCase())), [cards, query]);
 
   if (!deck) return <View style={styles.loading}><ActivityIndicator color={colors.green} /></View>;
-  const automaticNew = Math.max(0, Number(deck.daily_new_limit) - Number(deck.introduced_today));
-  const sessionCount = Number(deck.due_count) + Math.min(Number(deck.new_count), automaticNew);
+  const hasIntroducedToday = Number(deck.introduced_today) > 0;
+  const defaultNewCards = hasIntroducedToday ? 0 : Math.max(0, Number(deck.daily_new_limit));
+  const newCardsToAdd = manualNewCards ?? defaultNewCards;
+  const sessionCount = Number(deck.due_count) + Math.min(Number(deck.new_count), newCardsToAdd);
 
   const changeLimit = async (delta: number) => {
-    await updateDailyLimit(deckId, Number(deck.daily_new_limit) + delta);
-    await load();
+    const nextValue = Math.max(0, newCardsToAdd + delta);
+    setManualNewCards(nextValue);
+    if (!hasIntroducedToday) {
+      await updateDailyLimit(deckId, nextValue);
+      setDeck((value) => value ? { ...value, daily_new_limit: nextValue } : value);
+    }
   };
 
   return (
@@ -204,14 +211,14 @@ function DeckScreen({ deckId, onBack, onStudy, onImport }: { deckId: number; onB
 
         <View style={styles.sessionPanel}>
           <View style={styles.panelTop}>
-            <View><Text style={styles.panelTitle}>Nouvelles cartes / jour</Text><Text style={styles.panelCaption}>{deck.introduced_today} déjà découvertes aujourd’hui</Text></View>
+            <View><Text style={styles.panelTitle}>Nombre de nouvelles cartes à ajouter</Text><Text style={styles.panelCaption}>{deck.introduced_today} déjà découvertes aujourd’hui</Text></View>
             <View style={styles.stepper}>
               <Pressable onPress={() => changeLimit(-1)} style={styles.stepperButton}><Ionicons name="remove" size={18} color={colors.ink} /></Pressable>
-              <Text style={styles.stepperValue}>{deck.daily_new_limit}</Text>
+              <Text style={styles.stepperValue}>{newCardsToAdd}</Text>
               <Pressable onPress={() => changeLimit(1)} style={styles.stepperButton}><Ionicons name="add" size={18} color={colors.ink} /></Pressable>
             </View>
           </View>
-          <PrimaryButton label={sessionCount ? `Commencer · ${sessionCount} carte${sessionCount > 1 ? 's' : ''}` : 'Lancer une session'} icon="play" onPress={onStudy} />
+          <PrimaryButton label={sessionCount ? `Commencer · ${sessionCount} carte${sessionCount > 1 ? 's' : ''}` : 'Lancer une session'} icon="play" onPress={() => onStudy(newCardsToAdd)} />
         </View>
 
         <View style={styles.sectionHeaderCompact}>
@@ -322,7 +329,7 @@ function CardEditor({ visible, deckId, card, onClose, onSaved }: { visible: bool
   );
 }
 
-function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void }) {
+function StudyScreen({ deckId, newCardAllowance, onClose }: { deckId: number; newCardAllowance: number; onClose: () => void }) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [queue, setQueue] = useState<Card[]>([]);
   const [revealed, setRevealed] = useState(false);
@@ -338,10 +345,10 @@ function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void 
   }, []);
 
   useEffect(() => {
-    Promise.all([getDeck(deckId), getSessionCards(deckId)]).then(([nextDeck, cards]) => {
+    Promise.all([getDeck(deckId), getSessionCards(deckId, newCardAllowance)]).then(([nextDeck, cards]) => {
       setDeck(nextDeck); setQueue(cards); setLoading(false);
     });
-  }, [deckId]);
+  }, [deckId, newCardAllowance]);
 
   const current = queue[0];
   useEffect(() => {
@@ -585,8 +592,8 @@ function AppContent() {
     <View style={styles.app}>
       <StatusBar style="dark" />
       {route.name === 'home' ? <HomeScreen onOpenDeck={(deckId) => setRoute({ name: 'deck', deckId })} onCreate={() => setCreateOpen(true)} /> : null}
-      {route.name === 'deck' ? <DeckScreen deckId={route.deckId} onBack={() => setRoute({ name: 'home' })} onStudy={() => setRoute({ name: 'study', deckId: route.deckId })} onImport={() => setRoute({ name: 'import', deckId: route.deckId })} /> : null}
-      {route.name === 'study' ? <StudyScreen deckId={route.deckId} onClose={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
+      {route.name === 'deck' ? <DeckScreen deckId={route.deckId} onBack={() => setRoute({ name: 'home' })} onStudy={(newCardAllowance) => setRoute({ name: 'study', deckId: route.deckId, newCardAllowance })} onImport={() => setRoute({ name: 'import', deckId: route.deckId })} /> : null}
+      {route.name === 'study' ? <StudyScreen deckId={route.deckId} newCardAllowance={route.newCardAllowance} onClose={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
       {route.name === 'import' ? <ImportScreen deckId={route.deckId} onBack={() => setRoute({ name: 'deck', deckId: route.deckId })} onDone={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
       <CreateDeckModal visible={createOpen} onClose={() => setCreateOpen(false)} onCreated={(deckId) => { setCreateOpen(false); setRoute({ name: 'deck', deckId }); }} />
     </View>
