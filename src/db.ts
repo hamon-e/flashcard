@@ -3,7 +3,19 @@ import { Card, Deck, ImportResult, ReviewDelays } from './types';
 import { parseImportRows } from './csv';
 import { shuffleCards } from './sessionQueue';
 
-const dbPromise = SQLite.openDatabaseAsync('memento-v1.db');
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+
+function getDatabase() {
+  if (!dbPromise) {
+    dbPromise = SQLite.openDatabaseAsync('memento-v1.db').catch((error) => {
+      // Web SQLite holds an exclusive File System Access API handle. Allow a
+      // retry after another Mémento tab has released the database file.
+      dbPromise = null;
+      throw error;
+    });
+  }
+  return dbPromise;
+}
 
 const startOfToday = () => {
   const date = new Date();
@@ -12,7 +24,7 @@ const startOfToday = () => {
 };
 
 export async function initializeDatabase() {
-  const db = await dbPromise;
+  const db = await getDatabase();
   await db.execAsync(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
@@ -95,7 +107,7 @@ async function seedDemo(db: SQLite.SQLiteDatabase) {
 }
 
 export async function getDecks(): Promise<Deck[]> {
-  const db = await dbPromise;
+  const db = await getDatabase();
   const now = Date.now();
   return db.getAllAsync<Deck>(
     `SELECT d.*,
@@ -119,7 +131,7 @@ export async function getDeck(deckId: number) {
 }
 
 export async function getCards(deckId: number): Promise<Card[]> {
-  const db = await dbPromise;
+  const db = await getDatabase();
   return db.getAllAsync<Card>(
     `SELECT c.*, p.first_seen_at, p.next_due_at, p.suspended
      FROM cards c JOIN progress p ON p.card_id = c.id
@@ -129,7 +141,7 @@ export async function getCards(deckId: number): Promise<Card[]> {
 }
 
 export async function createDeck(title: string, description: string) {
-  const db = await dbPromise;
+  const db = await getDatabase();
   const palette = ['#DDE9DE', '#CBDDF5', '#FBE5DF', '#F4E8B5'];
   const count = await db.getFirstAsync<{ count: number }>('SELECT COUNT(*) AS count FROM decks');
   return db.runAsync(
@@ -139,12 +151,12 @@ export async function createDeck(title: string, description: string) {
 }
 
 export async function updateDailyLimit(deckId: number, limit: number) {
-  const db = await dbPromise;
+  const db = await getDatabase();
   await db.runAsync('UPDATE decks SET daily_new_limit = ? WHERE id = ?', Math.max(0, limit), deckId);
 }
 
 export async function updateReviewDelays(deckId: number, delays: ReviewDelays) {
-  const db = await dbPromise;
+  const db = await getDatabase();
   const normalise = (value: number) => Math.max(0, Math.round(value));
   await db.runAsync(
     `UPDATE decks
@@ -162,7 +174,7 @@ export async function saveCard(input: {
   context: string;
   photoUri: string;
 }) {
-  const db = await dbPromise;
+  const db = await getDatabase();
   if (input.id) {
     await db.runAsync(
       'UPDATE cards SET first_name = ?, last_name = ?, context = ?, photo_uri = ? WHERE id = ?',
@@ -179,12 +191,12 @@ export async function saveCard(input: {
 }
 
 export async function deleteCard(cardId: number) {
-  const db = await dbPromise;
+  const db = await getDatabase();
   await db.runAsync('DELETE FROM cards WHERE id = ?', cardId);
 }
 
 export async function getSessionCards(deckId: number, newCardAllowance?: number): Promise<Card[]> {
-  const db = await dbPromise;
+  const db = await getDatabase();
   const deck = await getDeck(deckId);
   if (!deck) return [];
   const due = await db.getAllAsync<Card>(
@@ -201,7 +213,7 @@ export async function getSessionCards(deckId: number, newCardAllowance?: number)
 
 export async function getNewCards(deckId: number, limit: number, excludedIds: number[] = []): Promise<Card[]> {
   if (limit <= 0) return [];
-  const db = await dbPromise;
+  const db = await getDatabase();
   const exclusion = excludedIds.length ? `AND c.id NOT IN (${excludedIds.map(() => '?').join(',')})` : '';
   return db.getAllAsync<Card>(
     `SELECT c.*, p.first_seen_at, p.next_due_at, p.suspended
@@ -213,7 +225,7 @@ export async function getNewCards(deckId: number, limit: number, excludedIds: nu
 }
 
 export async function recordReview(cardId: number, delayMinutes: number) {
-  const db = await dbPromise;
+  const db = await getDatabase();
   const now = Date.now();
   const nextDue = now + delayMinutes * 60_000;
   await db.withTransactionAsync(async () => {
@@ -229,7 +241,7 @@ export async function recordReview(cardId: number, delayMinutes: number) {
 }
 
 export async function markCardSeen(cardId: number) {
-  const db = await dbPromise;
+  const db = await getDatabase();
   const now = Date.now();
   await db.runAsync(
     `UPDATE progress
@@ -240,7 +252,7 @@ export async function markCardSeen(cardId: number) {
 }
 
 export async function resetDeckProgress(deckId: number) {
-  const db = await dbPromise;
+  const db = await getDatabase();
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `UPDATE progress
@@ -256,7 +268,7 @@ export async function resetDeckProgress(deckId: number) {
 }
 
 export async function importCsv(deckId: number, csvText: string, photoUris: Record<string, string> = {}): Promise<ImportResult> {
-  const db = await dbPromise;
+  const db = await getDatabase();
   const parsed = parseImportRows(csvText);
   const result: ImportResult = { imported: 0, updated: 0, skipped: 0, errors: [...parsed.errors] };
   const rows = parsed.rows;
