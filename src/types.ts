@@ -4,6 +4,10 @@ export type Deck = {
   description: string;
   color: string;
   daily_new_limit: number;
+  again_delay_minutes: number;
+  soon_delay_minutes: number;
+  later_delay_minutes: number;
+  tomorrow_delay_minutes: number;
   total_count: number;
   due_count: number;
   new_count: number;
@@ -25,7 +29,14 @@ export type Card = {
   suspended: number;
 };
 
-export type ReviewDelay = 0 | 10 | 60 | 1440;
+export type ReviewDelay = number;
+
+export type ReviewDelays = {
+  again: number;
+  soon: number;
+  later: number;
+  tomorrow: number;
+};
 
 export type ImportResult = {
   imported: number;

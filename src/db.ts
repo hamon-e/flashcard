@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { Card, Deck, ImportResult } from './types';
+import { Card, Deck, ImportResult, ReviewDelays } from './types';
 import { parseImportRows } from './csv';
 
 const dbPromise = SQLite.openDatabaseAsync('memento-v1.db');
@@ -49,6 +49,20 @@ export async function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS cards_deck_idx ON cards(deck_id);
     CREATE INDEX IF NOT EXISTS progress_due_idx ON progress(next_due_at);
   `);
+
+  const deckColumns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(decks)');
+  const existingColumns = new Set(deckColumns.map((column) => column.name));
+  const reviewDelayColumns = [
+    ['again_delay_minutes', 0],
+    ['soon_delay_minutes', 10],
+    ['later_delay_minutes', 60],
+    ['tomorrow_delay_minutes', 1440],
+  ] as const;
+  for (const [name, defaultValue] of reviewDelayColumns) {
+    if (!existingColumns.has(name)) {
+      await db.execAsync(`ALTER TABLE decks ADD COLUMN ${name} INTEGER NOT NULL DEFAULT ${defaultValue}`);
+    }
+  }
 
   const row = await db.getFirstAsync<{ count: number }>('SELECT COUNT(*) AS count FROM decks');
   if ((row?.count ?? 0) === 0) await seedDemo(db);
@@ -126,6 +140,17 @@ export async function createDeck(title: string, description: string) {
 export async function updateDailyLimit(deckId: number, limit: number) {
   const db = await dbPromise;
   await db.runAsync('UPDATE decks SET daily_new_limit = ? WHERE id = ?', Math.max(0, limit), deckId);
+}
+
+export async function updateReviewDelays(deckId: number, delays: ReviewDelays) {
+  const db = await dbPromise;
+  const normalise = (value: number) => Math.max(0, Math.round(value));
+  await db.runAsync(
+    `UPDATE decks
+     SET again_delay_minutes = ?, soon_delay_minutes = ?, later_delay_minutes = ?, tomorrow_delay_minutes = ?
+     WHERE id = ?`,
+    normalise(delays.again), normalise(delays.soon), normalise(delays.later), normalise(delays.tomorrow), deckId,
+  );
 }
 
 export async function saveCard(input: {

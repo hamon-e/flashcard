@@ -34,23 +34,33 @@ import {
   recordReview,
   saveCard,
   updateDailyLimit,
+  updateReviewDelays,
 } from './src/db';
 import { colors, radius } from './src/theme';
 import { prepareImport } from './src/importAsset';
 import { checkForAppUpdate } from './src/app-update';
-import { Card, Deck, ImportResult, ReviewDelay } from './src/types';
+import { Card, Deck, ImportResult, ReviewDelay, ReviewDelays } from './src/types';
 
 type Route =
   | { name: 'home' }
   | { name: 'deck'; deckId: number }
+  | { name: 'settings'; deckId: number }
   | { name: 'study'; deckId: number }
   | { name: 'import'; deckId: number };
 
-const delayOptions: Array<{ value: ReviewDelay; title: string; subtitle: string; color: string; icon: keyof typeof Ionicons.glyphMap }> = [
-  { value: 0, title: 'Maintenant', subtitle: 'À la suite', color: colors.coralSoft, icon: 'refresh' },
-  { value: 10, title: '10 min', subtitle: 'Encore bientôt', color: '#F8ECCB', icon: 'timer-outline' },
-  { value: 60, title: '1 heure', subtitle: 'Plus tard', color: colors.blue, icon: 'time-outline' },
-  { value: 1440, title: '1 jour', subtitle: 'Demain', color: colors.greenSoft, icon: 'calendar-outline' },
+const formatDelay = (minutes: number) => {
+  if (minutes === 0) return 'Immédiatement';
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes % 1440 === 0) return `${minutes / 1440} jour${minutes === 1440 ? '' : 's'}`;
+  if (minutes % 60 === 0) return `${minutes / 60} h`;
+  return `${minutes} min`;
+};
+
+const getDelayOptions = (deck: Deck): Array<{ value: ReviewDelay; title: string; subtitle: string; color: string; icon: keyof typeof Ionicons.glyphMap }> => [
+  { value: Number(deck.again_delay_minutes), title: formatDelay(Number(deck.again_delay_minutes)), subtitle: 'À la suite', color: colors.coralSoft, icon: 'refresh' },
+  { value: Number(deck.soon_delay_minutes), title: formatDelay(Number(deck.soon_delay_minutes)), subtitle: 'Encore bientôt', color: '#F8ECCB', icon: 'timer-outline' },
+  { value: Number(deck.later_delay_minutes), title: formatDelay(Number(deck.later_delay_minutes)), subtitle: 'Plus tard', color: colors.blue, icon: 'time-outline' },
+  { value: Number(deck.tomorrow_delay_minutes), title: formatDelay(Number(deck.tomorrow_delay_minutes)), subtitle: 'Demain', color: colors.greenSoft, icon: 'calendar-outline' },
 ];
 
 function IconButton({ name, onPress, label }: { name: keyof typeof Ionicons.glyphMap; onPress: () => void; label: string }) {
@@ -157,7 +167,7 @@ function HomeScreen({ onOpenDeck, onCreate }: { onOpenDeck: (id: number) => void
   );
 }
 
-function DeckScreen({ deckId, onBack, onStudy, onImport }: { deckId: number; onBack: () => void; onStudy: () => void; onImport: () => void }) {
+function DeckScreen({ deckId, onBack, onStudy, onImport, onSettings }: { deckId: number; onBack: () => void; onStudy: () => void; onImport: () => void; onSettings: () => void }) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [cards, setCards] = useState<Card[]>([]);
   const [editorCard, setEditorCard] = useState<Card | null | undefined>(undefined);
@@ -184,7 +194,7 @@ function DeckScreen({ deckId, onBack, onStudy, onImport }: { deckId: number; onB
         <View style={styles.topBar}>
           <IconButton name="arrow-back" label="Retour" onPress={onBack} />
           <Text style={styles.topBarTitle}>Paquet</Text>
-          <IconButton name="ellipsis-horizontal" label="Options" onPress={() => Alert.alert(deck.title, `${deck.total_count} cartes dans ce paquet.`)} />
+          <IconButton name="ellipsis-horizontal" label="Réglages du paquet" onPress={onSettings} />
         </View>
 
         <View style={styles.deckHero}>
@@ -243,6 +253,87 @@ function DeckScreen({ deckId, onBack, onStudy, onImport }: { deckId: number; onB
         onClose={() => setEditorCard(undefined)}
         onSaved={async () => { setEditorCard(undefined); await load(); }}
       />
+    </SafeAreaView>
+  );
+}
+
+function DeckSettingsScreen({ deckId, onBack }: { deckId: number; onBack: () => void }) {
+  const [deck, setDeck] = useState<Deck | null>(null);
+  const [delays, setDelays] = useState<ReviewDelays | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    getDeck(deckId).then((nextDeck) => {
+      setDeck(nextDeck);
+      if (nextDeck) {
+        setDelays({
+          again: Number(nextDeck.again_delay_minutes),
+          soon: Number(nextDeck.soon_delay_minutes),
+          later: Number(nextDeck.later_delay_minutes),
+          tomorrow: Number(nextDeck.tomorrow_delay_minutes),
+        });
+      }
+    });
+  }, [deckId]);
+
+  const updateDelay = (key: keyof ReviewDelays, value: string) => {
+    const parsed = Number.parseInt(value.replace(/[^0-9]/g, ''), 10);
+    setDelays((current) => current ? { ...current, [key]: Number.isFinite(parsed) ? parsed : 0 } : current);
+  };
+
+  const save = async () => {
+    if (!delays) return;
+    setSaving(true);
+    await updateReviewDelays(deckId, delays);
+    setSaving(false);
+    onBack();
+  };
+
+  if (!deck || !delays) return <View style={styles.loading}><ActivityIndicator color={colors.green} /></View>;
+
+  const timerRows: Array<{ key: keyof ReviewDelays; title: string; note: string; icon: keyof typeof Ionicons.glyphMap; tint: string }> = [
+    { key: 'again', title: 'Immédiatement', note: 'La carte reste dans la session', icon: 'refresh', tint: colors.coralSoft },
+    { key: 'soon', title: '10 min', note: 'Pour la revoir bientôt', icon: 'timer-outline', tint: '#F8ECCB' },
+    { key: 'later', title: '1 h', note: 'Pour la revoir plus tard', icon: 'time-outline', tint: colors.blue },
+    { key: 'tomorrow', title: '1 jour', note: 'Pour la revoir demain', icon: 'calendar-outline', tint: colors.greenSoft },
+  ];
+
+  return (
+    <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
+      <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+        <View style={styles.topBar}>
+          <IconButton name="arrow-back" label="Retour au paquet" onPress={onBack} />
+          <Text style={styles.topBarTitle}>Réglages</Text>
+          <View style={{ width: 44 }} />
+        </View>
+        <View style={styles.settingsHero}>
+          <View style={styles.settingsIcon}><Ionicons name="timer-outline" size={31} color={colors.green} /></View>
+          <Text style={styles.settingsTitle}>Timers de révision</Text>
+          <Text style={styles.settingsText}>Choisis le délai appliqué à chaque réponse pour « {deck.title} ».</Text>
+        </View>
+        <Text style={styles.settingsLabel}>DURÉES EN MINUTES</Text>
+        <View style={styles.timerList}>
+          {timerRows.map((timer, index) => (
+            <View key={timer.key} style={[styles.timerRow, index < timerRows.length - 1 && styles.timerRowBorder]}>
+              <View style={[styles.timerIcon, { backgroundColor: timer.tint }]}><Ionicons name={timer.icon} size={20} color={colors.green} /></View>
+              <View style={styles.timerCopy}><Text style={styles.timerTitle}>{timer.title}</Text><Text style={styles.timerNote}>{timer.note}</Text></View>
+              <View style={styles.timerInputWrap}>
+                <TextInput
+                  accessibilityLabel={`Durée ${timer.title} en minutes`}
+                  value={String(delays[timer.key])}
+                  onChangeText={(value) => updateDelay(timer.key, value)}
+                  keyboardType="number-pad"
+                  selectTextOnFocus
+                  style={styles.timerInput}
+                />
+                <Text style={styles.timerUnit}>min</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+        <Text style={styles.settingsHint}>0 minute remet la carte immédiatement dans la file. Les changements s’appliqueront à la prochaine réponse.</Text>
+        <PrimaryButton label={saving ? 'Enregistrement…' : 'Enregistrer les réglages'} icon="checkmark" disabled={saving} onPress={save} />
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -413,8 +504,8 @@ function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void 
           <View style={styles.ratingArea}>
             <Text style={styles.ratingPrompt}>Quand veux-tu la revoir ?</Text>
             <View style={styles.ratingGrid}>
-              {delayOptions.map((option) => (
-                <Pressable accessibilityRole="button" accessibilityLabel={`Revoir ${option.title}`} disabled={rating} key={option.value} onPress={() => rate(option.value)} style={({ pressed }) => [styles.ratingButton, { backgroundColor: option.color }, rating && styles.disabled, pressed && styles.pressed]}>
+              {getDelayOptions(deck).map((option) => (
+                <Pressable accessibilityRole="button" accessibilityLabel={`Revoir ${option.title}`} disabled={rating} key={option.icon} onPress={() => rate(option.value)} style={({ pressed }) => [styles.ratingButton, { backgroundColor: option.color }, rating && styles.disabled, pressed && styles.pressed]}>
                   <Ionicons name={option.icon} size={21} color={colors.ink} />
                   <View><Text style={styles.ratingTitle}>{option.title}</Text><Text style={styles.ratingSubtitle}>{option.subtitle}</Text></View>
                 </Pressable>
@@ -548,7 +639,8 @@ function AppContent() {
     <View style={styles.app}>
       <StatusBar style="dark" />
       {route.name === 'home' ? <HomeScreen onOpenDeck={(deckId) => setRoute({ name: 'deck', deckId })} onCreate={() => setCreateOpen(true)} /> : null}
-      {route.name === 'deck' ? <DeckScreen deckId={route.deckId} onBack={() => setRoute({ name: 'home' })} onStudy={() => setRoute({ name: 'study', deckId: route.deckId })} onImport={() => setRoute({ name: 'import', deckId: route.deckId })} /> : null}
+      {route.name === 'deck' ? <DeckScreen deckId={route.deckId} onBack={() => setRoute({ name: 'home' })} onStudy={() => setRoute({ name: 'study', deckId: route.deckId })} onImport={() => setRoute({ name: 'import', deckId: route.deckId })} onSettings={() => setRoute({ name: 'settings', deckId: route.deckId })} /> : null}
+      {route.name === 'settings' ? <DeckSettingsScreen deckId={route.deckId} onBack={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
       {route.name === 'study' ? <StudyScreen deckId={route.deckId} onClose={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
       {route.name === 'import' ? <ImportScreen deckId={route.deckId} onBack={() => setRoute({ name: 'deck', deckId: route.deckId })} onDone={() => setRoute({ name: 'deck', deckId: route.deckId })} /> : null}
       <CreateDeckModal visible={createOpen} onClose={() => setCreateOpen(false)} onCreated={(deckId) => { setCreateOpen(false); setRoute({ name: 'deck', deckId }); }} />
@@ -618,6 +710,22 @@ const styles = StyleSheet.create({
   largeDeckMark: { width: 72, height: 72, borderRadius: 23, alignItems: 'center', justifyContent: 'center', marginBottom: 13 },
   deckHeroTitle: { fontSize: 29, fontWeight: '900', color: colors.ink, letterSpacing: -0.8, textAlign: 'center' },
   deckHeroDescription: { fontSize: 14, color: colors.muted, textAlign: 'center', marginTop: 6 },
+  settingsHero: { alignItems: 'center', paddingTop: 22, paddingBottom: 28 },
+  settingsIcon: { width: 72, height: 72, borderRadius: 23, backgroundColor: colors.greenSoft, alignItems: 'center', justifyContent: 'center' },
+  settingsTitle: { fontSize: 28, fontWeight: '900', color: colors.ink, letterSpacing: -0.7, marginTop: 16 },
+  settingsText: { maxWidth: 390, color: colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 7 },
+  settingsLabel: { fontSize: 10, fontWeight: '900', letterSpacing: 1.1, color: colors.muted, marginBottom: 9 },
+  timerList: { backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.line, borderRadius: radius.medium, paddingHorizontal: 15, marginBottom: 13 },
+  timerRow: { minHeight: 82, flexDirection: 'row', alignItems: 'center' },
+  timerRowBorder: { borderBottomWidth: 1, borderBottomColor: '#ECECE7' },
+  timerIcon: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginRight: 11 },
+  timerCopy: { flex: 1, minWidth: 0 },
+  timerTitle: { color: colors.ink, fontSize: 15, fontWeight: '800' },
+  timerNote: { color: colors.muted, fontSize: 11, marginTop: 3 },
+  timerInputWrap: { height: 42, minWidth: 76, borderRadius: 12, backgroundColor: '#F8F8F5', borderWidth: 1, borderColor: colors.line, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8 },
+  timerInput: { width: 37, color: colors.ink, fontSize: 15, fontWeight: '900', textAlign: 'right', paddingVertical: 0 },
+  timerUnit: { color: colors.muted, fontSize: 10, marginLeft: 4, fontWeight: '700' },
+  settingsHint: { color: colors.muted, fontSize: 11, lineHeight: 16, marginBottom: 20 },
   statRow: { flexDirection: 'row', marginTop: 25, marginBottom: 22, width: '100%', justifyContent: 'center' },
   stat: { flex: 1, alignItems: 'center' },
   statValue: { fontSize: 22, fontWeight: '900', color: colors.ink },
