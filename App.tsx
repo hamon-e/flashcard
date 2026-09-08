@@ -221,7 +221,7 @@ function DeckScreen({ deckId, onBack, onStudy, onImport, onSettings }: { deckId:
 
         <View style={styles.sessionPanel}>
           <View style={styles.panelTop}>
-            <View><Text style={styles.panelTitle}>Nombre de nouvelles cartes à ajouter</Text><Text style={styles.panelCaption}>{deck.introduced_today} déjà découvertes aujourd’hui</Text></View>
+            <View><Text style={styles.panelTitle}>Nouvelles cartes</Text><Text style={styles.panelCaption}>{deck.introduced_today} déjà découvertes aujourd’hui</Text></View>
             <View style={styles.stepper}>
               <Pressable onPress={() => changeLimit(-1)} style={styles.stepperButton}><Ionicons name="remove" size={18} color={colors.ink} /></Pressable>
               <Text style={styles.stepperValue}>{newCardsToAdd}</Text>
