@@ -32,6 +32,7 @@ import {
   initializeDatabase,
   markCardSeen,
   recordReview,
+  resetDeckProgress,
   saveCard,
   updateDailyLimit,
 } from './src/db';
@@ -356,6 +357,26 @@ function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void 
     setManualOpen(false);
     if (!fresh.length) Alert.alert('Tout est déjà là', 'Il ne reste aucune nouvelle carte dans ce paquet.');
   };
+  const restartAllCards = () => {
+    Alert.alert(
+      'Réinitialiser le paquet ?',
+      'Toutes les cartes redeviendront nouvelles et leur historique de révision sera effacé.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Réinitialiser',
+          style: 'destructive',
+          onPress: async () => {
+            await resetDeckProgress(deckId);
+            const [nextDeck, cards] = await Promise.all([getDeck(deckId), getSessionCards(deckId)]);
+            setDeck(nextDeck);
+            setQueue(cards);
+            setReviewed(0);
+          },
+        },
+      ],
+    );
+  };
 
   if (loading || !deck) return <View style={styles.loading}><ActivityIndicator color={colors.green} /></View>;
   if (!current) {
@@ -368,6 +389,7 @@ function StudyScreen({ deckId, onClose }: { deckId: number; onClose: () => void 
           <Text style={styles.completeText}>{reviewed ? `${reviewed} réponse${reviewed > 1 ? 's' : ''} enregistrée${reviewed > 1 ? 's' : ''}.` : 'Aucune carte n’est due pour le moment.'}</Text>
           <View style={styles.completeActions}>
             <PrimaryButton label="Ajouter de nouvelles cartes" icon="add" onPress={() => setManualOpen(true)} />
+            {!reviewed ? <Pressable onPress={restartAllCards} style={styles.resetButton}><Ionicons name="refresh-outline" size={18} color={colors.green} /><Text style={styles.resetButtonText}>Réinitialiser toutes les cartes</Text></Pressable> : null}
             <Pressable onPress={onClose} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Retour au paquet</Text></Pressable>
           </View>
         </View>
@@ -687,6 +709,8 @@ const styles = StyleSheet.create({
   completeTitle: { fontSize: 29, fontWeight: '900', color: colors.ink, letterSpacing: -0.8 },
   completeText: { color: colors.muted, fontSize: 14, textAlign: 'center', marginTop: 8 },
   completeActions: { width: '100%', maxWidth: 400, marginTop: 31, gap: 9 },
+  resetButton: { minHeight: 52, borderRadius: 17, borderWidth: 1, borderColor: colors.green, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  resetButtonText: { color: colors.green, fontSize: 15, fontWeight: '800' },
   secondaryButton: { minHeight: 52, justifyContent: 'center', alignItems: 'center' },
   secondaryButtonText: { fontSize: 14, color: colors.green, fontWeight: '800' },
   scrim: { flex: 1, backgroundColor: 'rgba(17,24,19,0.35)', justifyContent: 'flex-end' },

@@ -213,6 +213,22 @@ export async function markCardSeen(cardId: number) {
   );
 }
 
+export async function resetDeckProgress(deckId: number) {
+  const db = await dbPromise;
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE progress
+       SET first_seen_at = NULL, next_due_at = NULL
+       WHERE card_id IN (SELECT id FROM cards WHERE deck_id = ?)`,
+      deckId,
+    );
+    await db.runAsync(
+      'DELETE FROM reviews WHERE card_id IN (SELECT id FROM cards WHERE deck_id = ?)',
+      deckId,
+    );
+  });
+}
+
 export async function importCsv(deckId: number, csvText: string, photoUris: Record<string, string> = {}): Promise<ImportResult> {
   const db = await dbPromise;
   const parsed = parseImportRows(csvText);
