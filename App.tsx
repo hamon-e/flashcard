@@ -675,14 +675,34 @@ function CreateDeckModal({ visible, onClose, onCreated }: { visible: boolean; on
 
 function AppContent() {
   const [ready, setReady] = useState(false);
+  const [initializationError, setInitializationError] = useState<string | null>(null);
   const [route, setRoute] = useState<Route>({ name: 'home' });
   const [createOpen, setCreateOpen] = useState(false);
-  useEffect(() => { initializeDatabase().then(() => setReady(true)).catch((error) => { console.error(error); Alert.alert('Erreur', 'La base locale n’a pas pu être ouverte.'); }); }, []);
+  const initialize = useCallback(async () => {
+    setReady(false);
+    setInitializationError(null);
+    try {
+      await initializeDatabase();
+      setReady(true);
+    } catch (error) {
+      console.error(error);
+      setInitializationError('La base locale est déjà utilisée dans un autre onglet. Ferme les autres onglets de Mémento puis réessaie.');
+    }
+  }, []);
+  useEffect(() => { void initialize(); }, [initialize]);
   useEffect(() => {
     // Laisse l'écran de lancement disparaître avant d'afficher une éventuelle alerte.
     const timeout = setTimeout(() => void checkForAppUpdate(), 700);
     return () => clearTimeout(timeout);
   }, []);
+  if (initializationError) return (
+    <View style={styles.splash}>
+      <View style={styles.logo}><Ionicons name="alert-circle-outline" size={30} color={colors.green} /></View>
+      <Text style={styles.splashTitle}>Mémento</Text>
+      <Text style={styles.initializationError}>{initializationError}</Text>
+      <PrimaryButton label="Réessayer" icon="refresh" onPress={() => void initialize()} />
+    </View>
+  );
   if (!ready) return <View style={styles.splash}><View style={styles.logo}><Ionicons name="sparkles" size={30} color={colors.green} /></View><Text style={styles.splashTitle}>Mémento</Text><ActivityIndicator color={colors.green} style={{ marginTop: 24 }} /></View>;
 
   return (
@@ -715,6 +735,7 @@ const styles = StyleSheet.create({
   splash: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.canvas },
   logo: { width: 68, height: 68, borderRadius: 22, backgroundColor: colors.lime, alignItems: 'center', justifyContent: 'center', transform: [{ rotate: '-4deg' }] },
   splashTitle: { fontSize: 26, fontWeight: '800', color: colors.ink, marginTop: 14, letterSpacing: -0.7 },
+  initializationError: { maxWidth: 300, marginTop: 12, marginBottom: 20, color: colors.muted, fontSize: 14, lineHeight: 20, textAlign: 'center' },
   pressed: { opacity: 0.76, transform: [{ scale: 0.98 }] },
   cardPressed: { opacity: 0.88, transform: [{ scale: 0.99 }] },
   disabled: { opacity: 0.4 },
