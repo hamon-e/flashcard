@@ -157,7 +157,7 @@ export async function deleteCard(cardId: number) {
   await db.runAsync('DELETE FROM cards WHERE id = ?', cardId);
 }
 
-export async function getSessionCards(deckId: number): Promise<Card[]> {
+export async function getSessionCards(deckId: number, newCardAllowance?: number): Promise<Card[]> {
   const db = await dbPromise;
   const deck = await getDeck(deckId);
   if (!deck) return [];
@@ -168,7 +168,7 @@ export async function getSessionCards(deckId: number): Promise<Card[]> {
      ORDER BY p.next_due_at ASC`,
     deckId, Date.now(),
   );
-  const allowance = Math.max(0, deck.daily_new_limit - deck.introduced_today);
+  const allowance = newCardAllowance ?? Math.max(0, deck.daily_new_limit - deck.introduced_today);
   const fresh = await getNewCards(deckId, allowance);
   return [...due, ...fresh];
 }
